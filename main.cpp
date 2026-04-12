@@ -9,7 +9,9 @@ int main(){
     InitWindow(screenWidth, screenHeight, "raylib [core] example - basic window");
     int currentFps{60};
 
-    Vector2 ballPosition = {-100.0F, -100.0F};
+    int  boxPositionY = {screenHeight/2 - 40};
+    int scrollSpeed{4};
+
     Color ballColor = DARKBLUE;
 
     SetTargetFPS(currentFps); //Detect window close button or ESC key
@@ -20,29 +22,15 @@ int main(){
         // ---------------
         // TODO: update your variable here
         // ----------------------------
-        if(IsKeyPressed(KEY_H)){
-            if(IsCursorHidden()) ShowCursor();
-            else HideCursor();
-        }
-        ballPosition = GetMousePosition();
-
-        if(IsMouseButtonDown(MOUSE_BUTTON_LEFT)) ballColor = MAROON;
-        else if(IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) ballColor = LIME;
-        else if(IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) ballColor = DARKBLUE;
-        else if(IsMouseButtonDown(MOUSE_BUTTON_SIDE)) ballColor = PURPLE;
-        else if(IsMouseButtonDown(MOUSE_BUTTON_EXTRA)) ballColor = YELLOW;
-        else if(IsMouseButtonDown(MOUSE_BUTTON_FORWARD)) ballColor = ORANGE;
-        else if(IsMouseButtonDown(MOUSE_BUTTON_BACK)) ballColor = BEIGE;
+        boxPositionY -= (int)(GetMouseWheelMove()*scrollSpeed);
         // Draw
         // ---------------------
         BeginDrawing();
-            ClearBackground(RAYWHITE);
-            DrawCircleV(ballPosition, 40, ballColor);
-            DrawText("move ball with mouse and click mouse button to change color", 10, 10, 20, DARKGRAY);
-            DrawText("Press 'H' to toggle cursor visiblity", 10, 30, 20, DARKGRAY);
+        ClearBackground(RAYWHITE);
+        DrawRectangle(screenWidth/2 - 40, boxPositionY, 80, 80, MAROON);
 
-            if(IsCursorHidden()) DrawText("CURSOR Hidden", 20, 60, 20, RED);
-            else DrawText("CURSOR VISIBLE", 20, 60, 20, LIME);
+        DrawText("Use mouse wheel to move the cube up and down!", 10, 10, 20, GRAY);
+        DrawText(TextFormat("Box position Y: %03i", boxPositionY), 10,40, 20 ,LIGHTGRAY);
         EndDrawing();
     }
     CloseWindow();
