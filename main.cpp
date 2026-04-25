@@ -18,11 +18,11 @@ int main(){
 
     //Define the camera to look into our 3D world
     Camera3D camera = {0};
-    camera.position = (Vector3){0.0F, 10.0F, 10.0F}; // Camera position
-    camera.target = (Vector3){0.0F, 0.0F, 0.0F}; // Camera looking at point
-    camera.up = (Vector3){0.0F, 1.0F, 0.0F}; // camera up vector (rotation towards target)
+    camera.position = (Vector3){10.0F, 10.0F, 10.0F};
+    camera.target = (Vector3){0.0F, 0.0F, 0.0F};
+    camera.up = (Vector3){0.0F, 1.0F, 0.0F};
     camera.fovy = 45.0F;
-    camera.projection = CAMERA_PERSPECTIVE;  // camera mode type
+    camera.projection = CAMERA_PERSPECTIVE;
 
     Vector3 cubePosition = {0.0F, 0.0F, 0.0F};
 
@@ -33,25 +33,25 @@ int main(){
         //Update
         // ---------------
         // TODO: update your variable here
-        //Update camera compture movment internally depending on the camera mode
-        //Some default standard keyboard/mouse inputs ar hardcode to simplify use
-        //For advanced camera controls, it's recommended to compute camera movement manually
-
+        UpdateCamera(&camera, CAMERA_FREE);
+        if(IsKeyPressed(KEY_Z)) camera.target = (Vector3){0.0F, 0.0F, 0.0F};
         // --------------------
         // Draw
         // ---------------------
         BeginDrawing();
-                ClearBackground(RAYWHITE);
-                BeginMode3D(camera);
-                    DrawCube(cubePosition, 2.0F, 2.0F, 2.0F, RED);
-                    DrawCubeWires(cubePosition, 2.0F, 2.0F, 2.0F, MAROON);
+        ClearBackground(RAYWHITE);
+        BeginMode3D(camera);
+            DrawCube(cubePosition, 2.0F, 2.0F, 2.0F, RED);
+            DrawCubeWires(cubePosition, 2.0F, 2.0F, 2.0F, MAROON);
+            DrawGrid(10, 1.0F);
+        EndMode3D();
+        DrawRectangle(10, 10, 320, 93, Fade(SKYBLUE, 0.5F));
+        DrawRectangleLines(10, 10, 320, 93, BLUE);
 
-                    DrawGrid(10,1.0F);
-                EndMode3D();
-
-                DrawText("Welcome to the third cube dimension!", 10, 40, 20, DARKGRAY);
-                DrawFPS(10, 10);
-
+        DrawText("Free camera default controls:", 20, 20, 10, BLACK);
+        DrawText("- Mouse Wheel to Zoom in-out:", 40, 40, 10, DARKGRAY);
+        DrawText("- Mouse Wheel Pressed to Pan:", 40, 60, 10, DARKGRAY);
+        DrawText("- Z to zoom to (0, 0, 0):", 40, 80, 10, DARKGRAY);
         EndDrawing();
     }
     CloseWindow();
