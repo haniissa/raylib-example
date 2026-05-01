@@ -4,57 +4,138 @@
 #include <raylib.h>
 #include <fmt/chrono.h>
 
-struct Ball{
-    Vector2 position{(float)GetScreenWidth()/ 2, (float)GetScreenHeight() / 2};
-    float speed{120};
-    float size{5};
-    float dx{2};
-    float dy{2};
+#define FPS 60
+#define WIDTH 800
+#define HEIGHT 450
+
+enum AnimationType{
+    REPEATING = 1,
+    ONESHOT = 2,
 };
 
-// struct Paddle{};
+enum Direction{
+    LEFT = -1,
+    RIGHT = 1,
+};
+
+struct Animation{
+    int first;
+    int last;
+    int cur;
+    int step;
+    float speed;
+    float duration_left;
+    AnimationType type;
+};
+
+void animation_update(Animation* self){
+    float dt = GetFrameTime();
+    self->duration_left -= dt;
+    // fmt::print("duration_left: {}\n", self->duration_left);
+    if(self->duration_left <= 0.0){
+        // fmt::print("less than 0 duration_left: {}\n", self->duration_left);
+        self->duration_left = self->speed;
+        self->cur = self->step;
+        if(self->cur > self->last){
+            switch(self->type){
+                case REPEATING:
+                    self->cur = self->first;
+                    break;
+                case ONESHOT:
+                    self->cur = self->last;
+                    break;
+            }
+        }else if(self->cur < self->first){
+            switch(self->type){
+                case REPEATING:
+                    self->cur = self->last;
+                    break;
+                case ONESHOT:
+                    self->cur = self->first;
+                    break;
+            }
+        }
+    }
+}
+//convert index to coordinate
+Rectangle animation_frame(Animation* self, int num_per_row){
+    int x = (self->cur % num_per_row) * 16.0; // with multiply we convert to pixel not tail
+    int y = (self->cur / num_per_row) * 16.0;  // with multiply we convert to pixel not tail
+    return (Rectangle){(float)x, (float)y, 16.0, 16.0};
+};
 
 int main(){
     //Initization
-    constexpr int screenWidth{800};
-    constexpr int screenHeight{450};
+    constexpr int screenWidth{WIDTH};
+    constexpr int screenHeight{HEIGHT};
+    InitWindow(screenWidth, screenHeight, "raylib animation");
 
-    InitWindow(screenWidth, screenHeight, "raylib [core] example - basic window");
-    SetTargetFPS(60); //Detect window close button or ESC key
-    Ball ball;
-    auto lastTime = std::chrono::system_clock::now();
+
+    Texture2D player_idle_texture = LoadTexture("asset/herochar sprites(new)/herochar_idle_anim_strip_4.png");
+    Animation anim = (Animation){
+        .first = 0,
+        .last = 3,
+        .cur = 0,
+        .step = 1,
+        .speed = 0.1,
+        .duration_left = 0.1,
+        .type = REPEATING,
+    };
+
+    Animation anim2 = (Animation){
+           .first = 0,
+           .last = 3,
+           .cur = 3,
+           .step = -1,
+           .speed = 0.1,
+           .duration_left = 0.1,
+           .type = REPEATING,
+       };
+
+    Direction player_direction = LEFT;
+
+    SetTargetFPS(FPS); //Detect window close button or ESC key
     //main game loop
     while (!WindowShouldClose()) {
         //Update
         // ---------------
         // TODO: update your variable here
         // --------------------
-        auto currentTime = std::chrono::system_clock::now();
-        std::chrono::duration<float> elapsed = currentTime - lastTime;
-        float deltaTime = elapsed.count();
-        // float deltaTime = GetFrameTime() * ball.speed;
-        lastTime  = currentTime;
+        if(IsKeyPressed(KEY_SPACE))
+            anim.cur = anim.first;
 
-        ball.position.x += ball.dx * ball.speed * deltaTime;
-        ball.position.y += ball.dy * ball.speed * deltaTime;
+        if(IsKeyPressed(KEY_A))
+            player_direction = LEFT;
 
-        if(ball.position.x - ball.size > screenWidth or ball.position.x - ball.size < 0)
-            ball.position.x = screenWidth / 2;
-            // ball.dx *= -1 ;
-        else if (ball.position.y - ball.size > screenHeight or ball.position.y - ball.size< 0)
-            ball.position.y = screenHeight / 2;
-            // ball.dy *= -1 ;
+        if(IsKeyPressed(KEY_D))
+             player_direction = RIGHT;
 
+        animation_update(&anim);
+        animation_update(&anim2);
         // Draw
         // ---------------------
         BeginDrawing();
-            ClearBackground(BLACK);
-            DrawLine( 15,  screenHeight / 2, 15,  screenHeight/2 + 50, WHITE);
-            DrawLine( screenWidth - 15,  screenHeight / 2, screenWidth-15,  screenHeight/2 + 50, WHITE);
-            DrawCircle(ball.position.x, ball.position.y, ball.size, WHITE);
-            DrawLine(screenWidth / 2, 0, screenWidth/2, screenHeight, WHITE);
+            ClearBackground(SKYBLUE);
+            // DrawTexturePro(player_idle_texture,
+            //         {0, 0,static_cast<float>(player_idle_texture.width),
+            //         static_cast<float>(player_idle_texture.height)},
+            //         {10, 10, 100, 100},
+            //       {0, 0}, 0.0F, WHITE);
+
+            Rectangle player_frame = animation_frame(&anim, 4);
+            player_frame.width *= player_direction;
+
+            DrawTexturePro(player_idle_texture,
+                          player_frame,
+                          {10, 10, 100, 100},
+                        {0, 0}, 0.0F, WHITE);
+            DrawTexturePro(player_idle_texture,
+                                    animation_frame(&anim2, 4) ,
+                                     {130, 10, 100, 100},
+                                   {0, 0}, 0.0F, WHITE);
         EndDrawing();
     }
+    UnloadTexture(player_idle_texture);
     CloseWindow();
 
     return 0;
