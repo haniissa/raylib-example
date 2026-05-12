@@ -48,9 +48,9 @@ int main(){
             //Here we show the contents of the 3 dimensional array on the screen        //Here we show the contents of the 3 dimensional array on the screen.
             ClearBackground(RAYWHITE);
             DrawText(TextFormat("map[0][0][0]: %i", map[0][0][0]), 100, 100, 20, BLACK);
-            DrawText(TextFormat("map[9][0][0]: %i", map[0][0][0]), 100, 120, 20, BLACK);
-            DrawText(TextFormat("map[0][0][9]: %i", map[0][0][0]), 100, 140, 20, BLACK);
-            DrawText(TextFormat("map[0][0][9]: %i", map[0][0][0]), 100, 160, 20, BLACK);
+            DrawText(TextFormat("map[9][0][0]: %i", map[9][0][0]), 100, 120, 20, BLACK);
+            DrawText(TextFormat("map[0][0][9]: %i", map[0][0][9]), 100, 140, 20, BLACK);
+            DrawText(TextFormat("map[0][0][9]: %i", map[9][0][9]), 100, 160, 20, BLACK);
             DrawText(TextFormat("default = {0} slot of map[1][1][1]: %i", map[1][1][1]), 100, 180, 20, BLACK);
 
             //Check if boolmap[1][1][2] = true or false
