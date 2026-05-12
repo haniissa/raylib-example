@@ -1,2 +1,4 @@
 *.exe
 cop.cpp
+
+/build
