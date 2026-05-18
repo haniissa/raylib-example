@@ -4,6 +4,7 @@
 #include <fmt/format.h>
 #include <raylib.h>
 #include <fmt/chrono.h>
+#include <stdlib.h>
 #include <map>
 
 #define FPS 60
@@ -21,20 +22,29 @@ int main(){
     constexpr int screenHeight{HEIGHT};
     InitWindow(screenWidth, screenHeight, "raylib animation");
 
-    //We set up our 3 dimensional array here.it is a int array.
-    int map[10][10][10] = {0}; // the = {} means all the starting values are set to 0.
-
-    //Here we put some values inside the array.
-    map[0][0][0]=  10;
-    map[9][0][0]=  20; // With a setup size of 10 the maximum slot to be used is 9!
-    map[0][0][9]=  30;
-    map[9][0][9]=  40;
-
-    //Boolean map. Only true or false
-    bool boolmap[10][10][10] = {false};
-    boolmap[1][1][2] = true;
-
     SetTargetFPS(FPS); //Detect window close button or ESC key
+
+    //We generate a checked image for texturing WALLS
+    Image checked = GenImageChecked(2, 2, 1, 1, WHITE, DARKGRAY);
+    Texture2D texture = LoadTextureFromImage(checked);
+    UnloadImage(checked);
+
+    Model model = {0};
+    model = LoadModelFromMesh(GenMeshCube(1.0F, 1.0F, 1.0F));
+
+    //Set checked texture as default diffuse component for all models material
+    model.materials[0].maps[MAP_DIFFUSE].texture = texture;
+
+    //WALKABLE
+    Image checked2 = GenImageChecked(2,2, 1, 1, (Color){100, 0,0, 255}, RED);
+    Texture2D texture2 = LoadTextureFromImage(checked2);
+    UnloadImage(checked2);
+
+    Model model2 = {0};
+    model2 = LoadModelFromMesh(GenMeshCube(1.0F, 1.0F, 1.0F));
+
+    //Set checked texture as default diffuse component for all models material
+    model2.materials[0].maps[MAP_DIFFUSE].texture = texture2;
     //main game loop
     while (!WindowShouldClose()) {
         //Update
@@ -45,19 +55,6 @@ int main(){
         // Draw
         // ---------------------
         BeginDrawing();
-            //Here we show the contents of the 3 dimensional array on the screen        //Here we show the contents of the 3 dimensional array on the screen.
-            ClearBackground(RAYWHITE);
-            DrawText(TextFormat("map[0][0][0]: %i", map[0][0][0]), 100, 100, 20, BLACK);
-            DrawText(TextFormat("map[9][0][0]: %i", map[9][0][0]), 100, 120, 20, BLACK);
-            DrawText(TextFormat("map[0][0][9]: %i", map[0][0][9]), 100, 140, 20, BLACK);
-            DrawText(TextFormat("map[0][0][9]: %i", map[9][0][9]), 100, 160, 20, BLACK);
-            DrawText(TextFormat("default = {0} slot of map[1][1][1]: %i", map[1][1][1]), 100, 180, 20, BLACK);
-
-            //Check if boolmap[1][1][2] = true or false
-            if(boolmap[1][1][2] == true)
-                DrawText("boolmap[1][1][2] set to true.", 100, 200, 20, BLACK);
-            else
-                DrawText("boolmap[1][1][2] set to false.", 100, 200, 20, BLACK);
         EndDrawing();
     }
 
