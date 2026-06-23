@@ -6,7 +6,7 @@
 
 struct Ball{
     Vector2 position{(float)GetScreenWidth()/ 2, (float)GetScreenHeight() / 2};
-    float speed{100};
+    float speed{120};
     float size{5};
     float dx{2};
     float dy{2};
