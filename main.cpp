@@ -31,10 +31,11 @@ int main(){
         // --------------------
         auto currentTime = std::chrono::system_clock::now();
         std::chrono::duration<float> elapsed = currentTime - lastTime;
-        float deltaTime = elapsed.count();
-        // float deltaTime = GetFrameTime() * ball.speed;
-        lastTime  = currentTime;
+        // float deltaTime = elapsed.count();
+        float deltaTime = GetFrameTime();
+        // lastTime  = currentTime;
 
+        // ball.dx change randomnly the ball when hit outside the wall
         ball.position.x += ball.dx * ball.speed * deltaTime;
         ball.position.y += ball.dy * ball.speed * deltaTime;
 
