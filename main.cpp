@@ -23,8 +23,12 @@ struct Ball{
 };
 
 struct Paddle{
-    Rectangle leftPaddle = {15.0F, (float)screenHeight / 2, 10.0F, 50.0F};
-    Rectangle rightPaddle = {screenWidth - 25, (float)screenHeight / 2, 10.0F, 50.0F};
+    float WIDTH = 10.0F;
+    float HEIGHT = 50.0F;
+    float x = 15.0F;
+    float y = screenHeight / 2;
+    Rectangle leftPaddle = {x, y, WIDTH, HEIGHT};
+    Rectangle rightPaddle = {screenWidth - 25, y, WIDTH, HEIGHT};
 };
 
 int main(){
