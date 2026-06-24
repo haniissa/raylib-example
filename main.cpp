@@ -1,27 +1,40 @@
 #include <chrono>
 #include <cmath>
-#include <fmt/base.h>
+#include <memory>
 #include <raylib.h>
+#include <raymath.h>
+#include <fmt/base.h>
 #include <fmt/chrono.h>
+#include <memory>
+
+//Initization
+// constexpr int screenWidth{800};
+// constexpr int screenHeight{450};
+
+#define screenWidth 800
+#define screenHeight 450
 
 struct Ball{
-    Vector2 position{(float)GetScreenWidth()/ 2, (float)GetScreenHeight() / 2};
+    Vector2 position{0.0F, 0.0F}; //Safe efault value
     float speed{120};
     float size{5};
     float dx{2};
     float dy{2};
 };
 
-// struct Paddle{};
+struct Paddle{
+    Rectangle leftPaddle = {15.0F, (float)screenHeight / 2, 10.0F, 50.0F};
+    Rectangle rightPaddle = {screenWidth - 25, (float)screenHeight / 2, 10.0F, 50.0F};
+};
 
 int main(){
-    //Initization
-    constexpr int screenWidth{800};
-    constexpr int screenHeight{450};
 
     InitWindow(screenWidth, screenHeight, "raylib [core] example - basic window");
     SetTargetFPS(60); //Detect window close button or ESC key
     Ball ball;
+    ball.position = {.x=(float)screenWidth/ 2.0F, .y=(float)screenHeight /2.0F};
+    Paddle* paddle = new Paddle();
+    // auto paddle = std::make_unique<Paddle>();
     auto lastTime = std::chrono::system_clock::now();
     //main game loop
     while (!WindowShouldClose()) {
@@ -39,23 +52,42 @@ int main(){
         ball.position.x += ball.dx * ball.speed * deltaTime;
         ball.position.y += ball.dy * ball.speed * deltaTime;
 
-        if(ball.position.x - ball.size > screenWidth or ball.position.x - ball.size < 0)
-            ball.position.x = screenWidth / 2;
-            // ball.dx *= -1 ;
-        else if (ball.position.y - ball.size > screenHeight or ball.position.y - ball.size< 0)
-            ball.position.y = screenHeight / 2;
-            // ball.dy *= -1 ;
+
+
+        if(ball.position.x + ball.size > screenWidth or ball.position.x + ball.size < 0){
+            // ball.position.x +=ball.dx * ball.speed * deltaTime;
+            ball.position.x = screenWidth / 2.0F;
+            ball.position.y = screenHeight / 2.0F;
+            ball.dx *= -1 ;
+        }
+        else if (ball.position.y + ball.size > screenHeight or ball.position.y + ball.size< 0){
+            // ball.position.y +=ball.dy * ball.speed * deltaTime;
+            // ball.position.y = screenHeight / 2;
+            ball.dy *= -1 ;
+        }
+
+        // Check collision for paddles
+        if(CheckCollisionCircleRec(ball.position,  ball.size, paddle->leftPaddle)){
+            ball.dx *= -1;
+            ball.position.x += ball.dx * ball.speed * deltaTime;
+        }
+
+        if(CheckCollisionCircleRec(ball.position, ball.size, paddle->rightPaddle)){
+            ball.dy *= -1;
+            ball.position.y += ball.dy * ball.speed * deltaTime;
+        }
 
         // Draw
         // ---------------------
         BeginDrawing();
             ClearBackground(BLACK);
-            DrawLine( 15,  screenHeight / 2, 15,  screenHeight/2 + 50, WHITE);
-            DrawLine( screenWidth - 15,  screenHeight / 2, screenWidth-15,  screenHeight/2 + 50, WHITE);
+            DrawRectangle(paddle->leftPaddle.x, paddle->leftPaddle.y, paddle->leftPaddle.width, paddle->leftPaddle.height, WHITE);
+            DrawRectangle(paddle->rightPaddle.x,paddle->rightPaddle.y, paddle->rightPaddle.width, paddle->rightPaddle.height, WHITE);
             DrawCircle(ball.position.x, ball.position.y, ball.size, WHITE);
             DrawLine(screenWidth / 2, 0, screenWidth/2, screenHeight, WHITE);
         EndDrawing();
     }
+    delete paddle;
     CloseWindow();
 
     return 0;
