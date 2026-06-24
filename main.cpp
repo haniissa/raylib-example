@@ -29,6 +29,7 @@ struct Paddle{
     float y = screenHeight / 2;
     Rectangle leftPaddle = {x, y, WIDTH, HEIGHT};
     Rectangle rightPaddle = {screenWidth - 25, y, WIDTH, HEIGHT};
+    int movePaddle{250};
 };
 
 int main(){
@@ -52,6 +53,7 @@ int main(){
         float deltaTime = GetFrameTime();
         // lastTime  = currentTime;
 
+        //update the ball position
         // ball.dx change randomnly the ball when hit outside the wall
         ball.position.x += ball.dx * ball.speed * deltaTime;
         ball.position.y += ball.dy * ball.speed * deltaTime;
@@ -72,14 +74,29 @@ int main(){
 
         // Check collision for paddles
         if(CheckCollisionCircleRec(ball.position,  ball.size, paddle->leftPaddle)){
-            ball.dx *= -1;
+            ball.dx *= -1; //reverse direction
             ball.position.x += ball.dx * ball.speed * deltaTime;
         }
 
         if(CheckCollisionCircleRec(ball.position, ball.size, paddle->rightPaddle)){
-            ball.dy *= -1;
-            ball.position.y += ball.dy * ball.speed * deltaTime;
+            ball.dx *= -1; //reverse direction
+            ball.position.x += ball.dx * ball.speed * deltaTime;
         }
+
+        //add input function for paddle
+        if(IsKeyDown(KEY_S))
+            paddle->leftPaddle.y += paddle->movePaddle * deltaTime;
+
+
+        if(IsKeyDown(KEY_W))
+            paddle->leftPaddle.y -= paddle->movePaddle * deltaTime ;
+
+        if(IsKeyDown(KEY_UP))
+            paddle->rightPaddle.y -= paddle->movePaddle * deltaTime;
+
+        if(IsKeyDown(KEY_DOWN))
+            paddle->rightPaddle.y += paddle->movePaddle * deltaTime;
+
 
         // Draw
         // ---------------------
