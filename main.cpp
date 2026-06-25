@@ -122,9 +122,6 @@ int main(){
             paddle->rightPaddle.y = Clamp(paddle->rightPaddle.y, 0.0F, screenHeight - paddle->rightPaddle.height);
         }
 
-        // paddle->leftPaddle.y = std::clamp(paddle->leftPaddle.y, 0.0F, screenHeight - paddle->leftPaddle.height);
-
-        // paddle->rightPaddle.y = std::clamp(paddle->leftPaddle.y, 0.0F, screenHeight - paddle->leftPaddle.height);
 
 
 
