@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -5,7 +6,7 @@
 #include <raymath.h>
 #include <fmt/base.h>
 #include <fmt/chrono.h>
-#include <memory>
+
 
 //Initization
 // constexpr int screenWidth{800};
@@ -96,6 +97,30 @@ int main(){
 
         if(IsKeyDown(KEY_DOWN))
             paddle->rightPaddle.y += paddle->movePaddle * deltaTime;
+
+        //prevent the paddle from go out y-direction
+        if(paddle->leftPaddle.y < 0){
+            // paddle->leftPaddle.y = 0;
+            paddle->leftPaddle.y = std::max<float>(paddle->leftPaddle.y, 0);
+        }
+
+        if(paddle->leftPaddle.y + paddle->leftPaddle.height > screenHeight){
+            // paddle->leftPaddle.y =  screenHeight - paddle->leftPaddle.height;
+            paddle->leftPaddle.y = std::max<float>(screenHeight - paddle->leftPaddle.height, 0);
+        }
+
+        if(paddle->rightPaddle.y < 0){
+            paddle->rightPaddle.y = 0;
+        }
+
+        if(paddle->rightPaddle.y + paddle->rightPaddle.height > screenHeight){
+            paddle->rightPaddle.y = screenHeight - paddle->rightPaddle.height;
+        }
+
+        // paddle->leftPaddle.y = std::clamp(paddle->leftPaddle.y, 0.0F, screenHeight - paddle->leftPaddle.height);
+
+        // paddle->rightPaddle.y = std::clamp(paddle->leftPaddle.y, 0.0F, screenHeight - paddle->leftPaddle.height);
+
 
 
         // Draw
