@@ -101,20 +101,25 @@ int main(){
         //prevent the paddle from go out y-direction
         if(paddle->leftPaddle.y < 0){
             // paddle->leftPaddle.y = 0;
-            paddle->leftPaddle.y = std::max<float>(paddle->leftPaddle.y, 0);
+            // paddle->leftPaddle.y = std::max<float>(paddle->leftPaddle.y, 0);
+            paddle->leftPaddle.y = std::clamp(paddle->leftPaddle.y, 0.0F, screenHeight - paddle->leftPaddle.height);
         }
 
         if(paddle->leftPaddle.y + paddle->leftPaddle.height > screenHeight){
             // paddle->leftPaddle.y =  screenHeight - paddle->leftPaddle.height;
-            paddle->leftPaddle.y = std::max<float>(screenHeight - paddle->leftPaddle.height, 0);
+            // paddle->leftPaddle.y = std::max<float>(screenHeight - paddle->leftPaddle.height, 0);
+            paddle->leftPaddle.y = std::clamp(paddle->leftPaddle.y, 0.0F, screenHeight - paddle->leftPaddle.height);
+
         }
 
         if(paddle->rightPaddle.y < 0){
-            paddle->rightPaddle.y = 0;
+            // paddle->rightPaddle.y = 0;
+            paddle->rightPaddle.y = Clamp(paddle->rightPaddle.y, 0.0F, screenHeight - paddle->rightPaddle.height);
         }
 
         if(paddle->rightPaddle.y + paddle->rightPaddle.height > screenHeight){
-            paddle->rightPaddle.y = screenHeight - paddle->rightPaddle.height;
+            // paddle->rightPaddle.y = screenHeight - paddle->rightPaddle.height;
+            paddle->rightPaddle.y = Clamp(paddle->rightPaddle.y, 0.0F, screenHeight - paddle->rightPaddle.height);
         }
 
         // paddle->leftPaddle.y = std::clamp(paddle->leftPaddle.y, 0.0F, screenHeight - paddle->leftPaddle.height);
