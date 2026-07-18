@@ -1,26 +1,202 @@
-graph TD
-    A[Start] --> B[Initialize Raylib Window]
-    B --> C[Load Custom GLSL Shader vert/frag]
-    C --> D[Initialize Player, Enemies, Bullets]
-    D --> E[Start Game Loop]
-    E --> F{WindowShouldClose?}
-    F -- Yes --> G[Unload Shader]
-    G --> H[Close Window]
-    H --> I[End]
-    F -- No --> J[Get Delta Time & Update Custom 'time' Uniform]
-    J --> K[Update Player Position relative to Orbiting Camera]
-    K --> L[Shoot Bullet on Space or Left Mouse Click]
-    L --> M[Update Bullet Positions & Bounding Box Checks]
-    M --> N[Update Enemy Positions & Bounce off Walls]
-    N --> O[Check Collision: Bullets vs. Enemies]
-    O --> P[Begin Drawing]
-    P --> Q[Clear Window Background]
-    Q --> R[Begin Mode 3D with Camera]
-    R --> S[Draw Arena Wireframe Cube]
-    S --> T[Begin Shader Mode Custom Shader]
-    T --> U[Draw Player, Bullets, and Enemies]
-    U --> V[End Shader Mode]
-    V --> W[End Mode 3D]
-    W --> X[Draw 2D UI overlay Score, controls]
-    X --> Y[End Drawing]
-    Y --> E
+
+
+
+flowchart TD
+    subgraph MAIN["main.cpp - Entry Point"]
+       A["InitWinow(800, 450)"] --> B["SetTargetFPS(60)"]
+       B --> C["VulkanCompute::Init()"]
+       C --> C1["vkb::InstanceBuilder -> create VkInstance"]
+       C1 --> C2["vkb::PhysicalDeviceSelector -> select GPU"]
+       C2 --> C3["vkb::DeviceBuilder -> create VkDevice + get compute quque"]
+       C3 --> D["LoadeShader(shader.vert, shader.frag)"]
+       D --> E["GetShaderLocation(shader, 'time')"]
+       E --> F["Camer3D setup - position(0,15,35), target(0,0,0), fovy=45"]
+       F --> G["DisableCursor()"]
+       G --> H["Game game = Game(30.0)"]
+       H --> I["game.spawnEnemies(8)"]
+    end
+    subgraph GAMELOOP["Game Loop - while !WindowShouldClose()"]
+       I --> J["dt = GetFrameTime()"]
+       J --> K["timeVal = GetTime()"]
+       K --> L["SetShadreValue(shader, timeLoc, timeVal)"]
+       L --> M["camera.target = game.GetPlayer()"]
+       M --> N["UpdateCamera(&camera, CAMERA_THIRD_PERSON)"]
+       N --> O["Compute forward = normalize(target - position)"]
+       O --> P["Compute right = (-forward.z, 0, forward.x)"]
+       P ==> Q{"IsKeyDown?"}
+       Q ==> |W| R["moveDir += forawd"]
+       Q == S ==>  S["moveDir -= forward"]
+       Q == A ==>  T["moveDir -= right"]
+       Q == D ==>  U["moveDir += right"]
+       R --> V["Normalize moveDir"]
+       S --> V
+       T --> V
+       U --> V
+       V --> W{"IsKeyPressed(SPACE)?"}
+       W == YES ==> X["shootPressed = true"]
+       W == NO ==> Y["shootPressed = false"]
+       X --> Z["game.Update(dt, moveDir, camera, shootPressed)"]
+       Y --> Z
+    end
+    subgraph GAMEUPDATE["Game::Update()"]
+         Z ==> AA["Player::Update(dt, moveDir, halfArena)"]
+         AA --> AA1["Normalize moveDir, scale by speed * dt"]
+         AA1 --> AA2["position += moveDir"]
+         AA2 --> AA3["ClampToArena(position, halfArena)"]
+
+         Z ==> BB["EnemyManager::Update(dt, halfArena)"]
+         BB --> BB1["For each enemy:"]
+         BB1 --> BB2{"active?"}
+         BB2 == NO ==> BB3["Skip"]
+         BB2 == YES ==> BB4["position += velocity * dt"]
+         BB4 --> BB5{"abs(POS.y) > halfArean - size?"}
+         BB5 == YES ==> BB6["velocity.x *= -1, clamp x"]
+         BB5 == NO ==> BB7{"abs(pos.z) > halfArena - size?"}
+         BB7 == YES ==> BB8["velocity.x *= -1, clamp z"]
+         BB7 == NO ==> BB9["Continue"]
+
+         Z ==> CC["BulletPool::Update(dt, halfArena)"]
+         CC --> CC1["For each bullet:"]
+         CC1 ==> CC2{"active?"}
+         CC2 == NO ==> CC3["Skip"]
+         CC2 == YES ==> CC4["Position += veloctiy * dt"]
+         CC4 --> CC5{"IsOutOfBounds(pos, halfArena)?"}
+         CC5 ==> |Yes| CC6["active = false"]
+         CC5 ==> |No| CC7["Continue"]
+
+         Z ==> DD{"shootPressed && cooldown <= 0?"}
+         DD == Yes ==> DD1["forward = normalize(camera.target - caemra.position)"]
+         DD1 --> DD2["origin = player.position + forward * (size + 0.5)"]
+         DD2 --> DD3["BulletPool::Spawn(origin, forward, 40.0)"]
+         DD3 --> DD4["Find first inactive bullet slot"]
+         DD4 --> DD5["Set position, velocity = normalize(dir)*speed, active=true"]
+         DD5 --> DD6["cooldown = 0.18s"]
+         DD == No ==> EE
+
+         Z ==> EE["Collision: Bullet vs Enemy"]
+         EE --> EE1["For each bullet b:"]
+         EE1 --> EE2{"b.active?"}
+         EE2 == No ==> EE3["Skip"]
+         EE2 == Yes ==> EE4["For each enemy e:"]
+         EE4 --> EE5{"e.active?"}
+         EE5 == No ==> EE6["Skip"]
+         EE5 == Yes ==> EE7["Physics::bulletHitenemy(b.pos, b.size, e.pos, e.size)"]
+         EE7 --> EE8["cubeAABB -> CheckCollisionBoxes"]
+         EE8 --> EE9{"Hit?"}
+         EE9 == Yes ==> EE10["b.active=false, e.active=false, score++"]
+         EE9 == No ==> EE11["Continue"]
+
+         Z ==> FF["Collision: Player vs Enemy"]
+         FF --> FF1["For each enemy e:"]
+         FF1 --> FF2{"e.active?"}
+         FF2 == No ==> FF3["Skip"]
+         FF2 == Yes ==> FF4["Physics::playerHitEnemy(p.pos, p.size, e.pos, e.size)"]
+         FF4 --> FF5{"Hit?"}
+         FF5 == Yes ==> FF6["player.lives--"]
+         FF6 --> FF7["Player::Respawn() - position = (0,0,0)"]
+         FF7 --> FF8["Relocate enemy to random position"]
+         FF5 == No ==> FF9["Continue"]
+
+         Z ==> GG["enemy respawn timer (+dt)"]
+         GG ==> GG1{"timer > 3.0s?"}
+         GG1 == Yes ==> GG2["Find first inactive enemy"]
+         GG2 --> GG3["Set active=true, random position"]
+         GG3 --> GG4["Reset timer = 0"]
+         GG1 == No ==> HH
+
+         Z ==> HH["VulkanCompute::Dispatch(timeVal)"]
+         HH --> HH1{"enabled?"}
+         HH1 == No ==> HH2["Return immediately (WIP)"]
+         HH1 == Yes ==> HH3{"VkBeginCommandBuffer"}
+         HH3 --> HH4["vkCmdBindPipeline(COMPUTE)"]
+         HH4 --> HH5["VkCmdPushConstants(time, frame)"]
+         HH5 --> HH6["vkCmddispatch(16,1,1)"]
+         HH6 --> HH7["vkEndCommandBuffer -> vkQueueSubmit -> vkQueueWaitIdel"]
+    end
+    subgraph RENDERING["Rendering"]
+         HH2 --> II["BeginDrawing()"]
+         II --> JJ["clearBackground(10, 10, 20)"]
+         JJ --> KK["BeginMode3D(camera)"]
+         KK --> LL["DrawGrid(20, 2.0)"]
+         LL --> MM["BeginShaderMode(defaultShader)"]
+
+         MM --> NN["Game::Draw()"]
+         NN --> OO["Player::Draw() - DrawCube(blue) + DrawCubeWiresV"]
+         NN --> PP["BulletPool::Draw() - DrawCubeV(yellow) for each active bullet"]
+         NN --> QQ["EnemyManager::Draw() - DRawCubeV(random color) + DrawCubeWiresV for each active enemy"]
+         NN --> RR["DrawCubeWiresV - arena wireframe (skyblue, 0.25 alpha)"]
+
+         RR --> SS["EndShaderMode()"]
+         SS --> TT["EndMode3D()"]
+
+         TT --> UU["DrawFPS(10, 10)"]
+         UU --> VV["DrawText('Score: X Lives: Y', 10, 40"]
+         VV --> WW["DrawText('[WASD] Move [SPACE] Shoot [ESC] Exit')"]
+    end
+
+    XX --> J
+    subgraph CLENUP["Cleanup"]
+        Z --> |"WindowShouldClose()"| YY["VkComp.Cleanup()"]
+        YY --> YY1["vkDestroyCommandPool, Pipeline, PipelineLayout"]
+        YY1 --> YY2["vkDestroyShaderModule, DescriptorSetLayout"]
+        YY2 --> YY3["vkDestroyDevice, DebugMessenger, Instance"]
+        YY3 --> ZZ["UnloadShader(defaultShader)"]
+        ZZ --> ZZZ["CloseWindow()"]
+    end
+    subgraph SAHADER["Shader Pipeline"]
+         VERT["shader.vert - GLSL 330"] --> |"gl_Position = mvp * vec4(vertexPosition"| FRAG
+         FRAG["shader.frag - GLSL 330"] --> |"pulse = 0.85 + 0.15 * sin(time*4 + uv * 12)"| GLOW["glow = pow(edge, 3.0"]
+         GLOW --> OUT["finalColor = base * pulse + glow_offset"]
+    end
+    subgraph PHYSICS["Physics.h - Header-Only Utilities"]
+        P1["cubeAABB(cernter, haldfSize) -> BoudnigBox"] --> P2["bulletHitEnemy / playerHitenemy"]
+        P2 --> P3["CheckCollissionBoxed(b, e) --> bool"]
+        P4["IsOutOfBounds(pos, halfArena)"] --> P5["fabs(x) > half || fabs(y) > half || fabs(z) > half"]
+        P6["ClampToArena(pos, halfArena)"] --> P7["Clamp(x,y,z) to [-halfArena, halfArena]"]
+    end
+    subgraph VULKAN["VulkanCompute Lifecycle"]
+         V1["Init()"] --> V2["vkb::InstanceBuilder -> VkInstance"]
+         V2 --> V3["vkb::PhysicalDeviceSelector -> select discrete GPU"]
+         V3 --> V4["vkb::DeviceBuilder -> VkDevice + compute queue"]
+         V4 --> V5["enabled = false (default, WIP)"]
+
+         V6["Dispatch(time)"] --> V7{"enabled?"}
+         V7 == No ==> V8["Return"]
+         V7 == Yes ==> V9["Begin command buffer"]
+         V9 --> V10["Bind compute pipeline"]
+         V10 --> V11["Push constants: time + frame"]
+         V11 --> V12["Dispatch(16, 1, 1) workgroups"]
+         V12 --> V13["Submit + wait idle"]
+
+         V14["Cleanup()"] --> V15["Destroy all Vulkan objects"]
+    end
+
+
+
+
+%% graph TD
+%%     A[Start] --> B[Initialize Raylib Window]
+%%     B --> C[Load Custom GLSL Shader vert/frag]
+%%     C --> D[Initialize Player, Enemies, Bullets]
+%%     D --> E[Start Game Loop]
+%%     E --> F{WindowShouldClose?}
+%%     F -- Yes --> G[Unload Shader]
+%%     G --> H[Close Window]
+%%     H --> I[End]
+%%     F -- No --> J[Get Delta Time & Update Custom 'time' Uniform]
+%%     J --> K[Update Player Position relative to Orbiting Camera]
+%%     K --> L[Shoot Bullet on Space or Left Mouse Click]
+%%     L --> M[Update Bullet Positions & Bounding Box Checks]
+%%     M --> N[Update Enemy Positions & Bounce off Walls]
+%%     N --> O[Check Collision: Bullets vs. Enemies]
+%%     O --> P[Begin Drawing]
+%%     P --> Q[Clear Window Background]
+%%     Q --> R[Begin Mode 3D with Camera]
+%%     R --> S[Draw Arena Wireframe Cube]
+%%     S --> T[Begin Shader Mode Custom Shader]
+%%     T --> U[Draw Player, Bullets, and Enemies]
+%%     U --> V[End Shader Mode]
+%%     V --> W[End Mode 3D]
+%%     W --> X[Draw 2D UI overlay Score, controls]
+%%     X --> Y[End Drawing]
+%%     Y --> E
