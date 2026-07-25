@@ -1,2 +1,7 @@
 *.exe
 cop.cpp
+/build
+s.cpp
+test.cpp
+s.md
+src
