@@ -1,126 +1,191 @@
+//Milestone 1: open a window with raylib, bring up a Vulkan instance,
+// physical device, logical device, and swapchain through vk-bootstrapk,
+// and prove device seleciton works from the command line.
+//
+// Usage:
+// 		psx_maze_shooter          ->    picks the default GPU (vk-bootstrap)
+// 		psx_maze_shooter --gpu "RTX"   ->  picks the first device whose name
+//												contains "RTX"
+
+// Architechture: raylib owns the window and input polling. rahl's OpenGl
+// context exists underneath (IntWindow create it) but is left
+// completely idle -- we never call BeginDrawing/EndDrawing or any
+// raylib Draw* function. All rendering is hand-written Vulkan.
+
+
+
+
+#define GLFW_INCLUDE_NONE
+#include <cstdio>
+#include <fmt/base.h>
+#include <vulkan/vulkan_core.h>
 #include <raylib.h>
 #include <raymath.h>
+
+#include <fmt/core.h> // base give print and println core.h give a  format
+#include <GLFW/glfw3.h>
+#include <VkBootstrap.h>
+
+#include <cstdlib>
+#include <string>
+#include <memory>
 #include <vector>
 #include <algorithm>
-#include <memory>
-#include <fmt/core.h> // base give print and println core.h give a  format
-#include "Game.h"
-#include "VulkanCompute.h"
+#include <iostream>
+
 
 using namespace fmt;
 
-//Initization
-constexpr int screenWidth{800};
-constexpr int screenHeight{450};
-constexpr float ARENA_SIZE = 30.0F;
-constexpr float HALF_ARENA = ARENA_SIZE / 2.0F;
+//Window console apps can close before you read the last line of
+//output. Call this before any exit() so nothing gets lost.
+static void pauseBeforeExit(){
+	fmt::print("Press Enter to close...\n");
+	std::cin.get();
+}
+
+
+struct VulkanCore{
+	vkb::Instance instance;
+	VkSurfaceKHR surface = VK_NULL_HANDLE;
+	vkb::PhysicalDevice physicalDevice;
+	vkb::Device device;
+	VkQueue graphicsQueue = VK_NULL_HANDLE;
+	vkb::Swapchain swapchain;
+};
+
+// Enumerates every Vulkan-capable GPU on the system and logs it. If
+// preferrdName is non-empty, picks the first device whose name contains
+// that substring; otherwise falls back to vk-bootstrap's default
+// heuristic (prefers a discrete GPU)
+static vkb::PhysicalDevice pickPhysicalDevice(vkb::Instance& instance,
+	VkSurfaceKHR surface, const std::string& preferrdName){
+		vkb::PhysicalDeviceSelector selector {instance};
+		selector.set_surface(surface).set_minimum_version(1, 2);
+
+		auto devicesRet = selector.select_devices();
+		if(!devicesRet){
+			fmt::print(stderr, "Failed to enumerate Vulkan device: {}\n", devicesRet.error().message());
+			std::exit(1);
+		}
+
+		fmt::print("Available Vulkan device:\n");
+		for(auto& candidate : devicesRet.value())
+			fmt::print("    -{}\n", candidate.name);
+
+		if(!preferrdName.empty()){
+			for(auto& candidate : devicesRet.value()){
+				if(candidate.name.find(preferrdName) != std::string::npos){
+					fmt::print("Selected by --gup match: {}\n", candidate.name);
+					return candidate;
+				}
+			}
+			fmt::print("No device matched \"{}\" --falling back to default selection\n", preferrdName);
+		}
+		auto defaultRet = selector.select();
+		if(!defaultRet){
+			fmt::print(stderr, "Default device selection failed: {}\n", defaultRet.error().message());
+			pauseBeforeExit();
+			std::exit(1);
+		}
+		fmt::print("Selected (default): {}\n", defaultRet.value().name);
+		return defaultRet.value();
+	}
+static VulkanCore initVulkan(GLFWwindow* window, const std::string& preferredGpu){
+	VulkanCore core;
+
+	vkb::InstanceBuilder builder;
+	auto instRet = builder.set_app_name("PSX Maze Shooter")
+		.request_validation_layers()
+		.use_default_debug_messenger()
+		.require_api_version(1,2,0)
+		.build();
+
+	if(!instRet){
+		fmt::print(stderr, "Failed to create Vulkan instance: {}\n", instRet.error().message());
+		pauseBeforeExit();
+		std::exit(1);
+	}
+	core.instance = instRet.value();
+	//Diagnostic: prove the handle is actually valid befor ewe hand it to GLFW.
+	fmt::print("Vulkan instance handle: {}\n",
+		static_cast<void*>(core.instance.instance));
+	if(core.instance.instance == VK_NULL_HANDLE){
+		fmt::print(stderr, "vk-boostrap reported success bu the instance handle is null."
+			"This mean the vulkan loader itself is the problem, not our code---"
+			"most likey an incomplete/missing Vulkan SDK install.\n");
+		pauseBeforeExit();
+		std::exit(1);
+	}
+	if(glfwCreateWindowSurface(core.instance, window, nullptr, &core.surface) != VK_SUCCESS){
+		fmt::print(stderr, "Failed to create Vulkan surface from the GLFW window\n");
+		pauseBeforeExit();
+		std::exit(1);
+	}
+
+	core.physicalDevice = pickPhysicalDevice(core.instance, core.surface, preferredGpu);
+	vkb::DeviceBuilder deviceBulder{core.physicalDevice};
+	auto devRet = deviceBulder.build();
+	if(!devRet){
+		fmt::print(stderr, "Failed to create Vulkan device: {}\n", devRet.error().message());
+		pauseBeforeExit();
+		std::exit(1);
+	}
+	core.device = devRet.value();
+	core.graphicsQueue = core.device.get_queue(vkb::QueueType::graphics).value();
+
+	//Note: SwapchainBuilder's convenience method names have shifted
+	//slightly across vk-bootstrap release -- if this doesn't compile,
+	// check VkBootstrap.h in your fetched version for the exact name.
+	vkb::SwapchainBuilder swapchainBuilder{ core.device };
+	auto scRet = swapchainBuilder.use_default_format_selection()
+		.set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+		.build();
+	if(!scRet){
+		fmt::print(stderr, "Failed to create swapchain: {}\n", scRet.error().message());
+		pauseBeforeExit();
+		std::exit(1);
+	}
+	core.swapchain = scRet.value();
+	return core;
+}
 
 
 
-int main(){
+int main(int argc, char** argv){
+	std::string preferrdGpu;
+	for(int i = 1; i < argc; ++i){
+		std::string arg = argv[i];
+		if(arg == "--gpu" and i + 1 < argc){
+			preferrdGpu = argv[++i];
+		}
+	}
+	if(!glfwInit()){
+		fmt::print(stderr, "glfwInit() failed. \n");
+		pauseBeforeExit();
+		std::exit(1);
+	}
+	//No OpenGl context at all -- we're going stright to Vulkan
+	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    InitWindow(screenWidth, screenHeight, "raylib #D GLSL Shader Game");
-    SetTargetFPS(60); //Detect window close button or ESC key
+	GLFWwindow* window = glfwCreateWindow(1280, 720, "PSX Maze Shooter", nullptr, nullptr);
+	if(!window){
+		fmt::print(stderr, "glfwCreateWindow() failed.\n");
+		pauseBeforeExit();
+		glfwTerminate();
+		std::exit(1);
+	}
+	VulkanCore vk = initVulkan(window, preferrdGpu);
+	fmt::print("Vulkan device ready: {}\n", vk.physicalDevice.name);
+	fmt::print("Swapchain image: {}\n", vk.swapchain.image_count);
 
-
-    //--------Vulkan Compute (separate from raylib's OpenGL)
-    VulkanCompute vkComp;
-    vkComp.Init();
-
-    //Print startup message using fmt:
-    print("Game initialization complete. Arena size: {:.1F}\n", ARENA_SIZE);
-
-    //2. Lood Shaders
-    // Shader paths are relative to the executable output directory
-    Shader defaultShader = LoadShader("shaders/shader.vert", "shaders/shader.frag");
-
-    //Get the location of our custom "time" uniform in the shader
-    int timeLoc = GetShaderLocation(defaultShader, "time");
-    fmt::print("[Shader] time uniform @ location {}\n", timeLoc);
-
-
-    //3. Initialize Camera
-    Camera3D camera = {0};
-    camera.position = (Vector3){0.0F, 15.0F, 35.0F}; //Camera starting position
-    camera.target = (Vector3){0.0F, 0.0F, 0.0F}; // Look at the point
-    camera.up = (Vector3){0.0F, 1.0F, 0.0F}; // Field-of-view up-direction
-    camera.fovy = 45.0F;
-    camera.projection = CAMERA_PERSPECTIVE;
-
-    //disable default cursor behavior so camera arbits cleanly
-    DisableCursor();
-
-    std::vector<Bullet> bullets;
-    std::vector<Enemy> enemies;
-    int score{};
-
-    //----------Game state ----------------
-    Game game(ARENA_SIZE);
-    game.spawnEnemies(8);
-
-    //main game loop
-    while (!WindowShouldClose()) {
-        //Update
-        // ---------------
-        // TODO: update your variable here
-        // --------------------
-        float dt = GetFrameTime();
-        auto timeVal = (float)GetTime();
-        //Update the custom shader uniform
-        SetShaderValue(defaultShader, timeLoc, &timeVal, SHADER_UNIFORM_FLOAT);
-
-        //5. Camera Control & Movement
-        //update the camera's target to follow the player
-        camera.target = game.GetPlayer().position;
-        UpdateCamera(&camera, CAMERA_THIRD_PERSON);
-
-        //Calculate movement directions relative to camera viewpoint
-        Vector3 forward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
-        forward.y = 0.0F; //Keep movement Locaked to horizontal plane
-
-        Vector3 right = Vector3Normalize({-forward.z, 0.0F, forward.x}); // Orthogonal vector
-
-        Vector3 moveDir = {0.0F, 0.0F, 0.0F};
-
-        //Keyboard Inputs: WASD Movement
-        //normalized moveDir so no moving faster when press (w+d)
-        // so speed will be normal No vector normalization**: `forward` and `right` aren't
-        // normalized via `Vector3Normalize`. Without it, diagonal movement
-        // (W+D) will be ~1.41× faster than cardinal movement.
-        moveDir = Vector3Normalize(moveDir);
-        if(IsKeyDown(KEY_W)) moveDir = Vector3Add(moveDir, forward);
-        if(IsKeyDown(KEY_S)) moveDir = Vector3Subtract(moveDir, forward);
-        if(IsKeyDown(KEY_A)) moveDir = Vector3Subtract(moveDir, right);
-        if(IsKeyDown(KEY_D)) moveDir = Vector3Add(moveDir, right);
-
-        bool shootPresed = IsKeyPressed(KEY_SPACE);
-        game.Update(dt, moveDir, camera, shootPresed);
-
-        //Vulkan compute tick
-        vkComp.Dispatch(timeVal);
-
-        // Draw
-        // ---------------------
-        BeginDrawing();
-            ClearBackground({10, 10, 20, 255});
-
-            BeginMode3D(camera);
-           		DrawGrid(20, 2.0F);
-             	// arena wireframe
-             	BeginShaderMode(defaultShader);
-              		game.Draw();
-                EndShaderMode();
-            EndMode3D();
-
-            //2D HUD
-            DrawFPS(10, 10);
-            DrawText(fmt::format("Score: {} Lives: {}", game.GetScore(),
-            game.GetPlayer().lives).c_str(), 10, 40, 22, RAYWHITE);
-            DrawText("[WASD] Move  [SPACE] Shoot  [ESC] Exit", 10, screenHeight - 30, 16, ColorAlpha(RAYWHITE, 0.6F));
-        EndDrawing();
-    }
-    vkComp.Cleanup();
-    UnloadShader(defaultShader);
-    CloseWindow();
+	while(!glfwWindowShouldClose(window)){
+		glfwPollEvents();
+		if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS){
+			glfwSetWindowShouldClose(window, GLFW_TRUE);
+		}
+	}
+	glfwDestroyWindow(window);
+	glfwTerminate();
     return 0;
 }
