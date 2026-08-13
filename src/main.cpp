@@ -15,6 +15,7 @@
 
 
 
+#include <cstdint>
 #define GLFW_INCLUDE_NONE
 #include <cstdio>
 #include <fmt/base.h>
@@ -50,7 +51,16 @@ struct VulkanCore{
 	vkb::PhysicalDevice physicalDevice;
 	vkb::Device device;
 	VkQueue graphicsQueue = VK_NULL_HANDLE;
+	uint32_t graphicsQueueFamily = 0;
 	vkb::Swapchain swapchain;
+	std::vector<VkImage> swapchainImages;
+
+	VkCommandPool commandPool = VK_NULL_HANDLE;
+	std::vector<VkCommandBuffer> commandBuffers; // one per swapchain iamge
+
+	VkSemaphore imageAvailableSemaphore = VK_NULL_HANDLE;
+	VkSemaphore renderFinishedSemaphore = VK_NULL_HANDLE;
+	VkFence inFlightFence = VK_NULL_HANDLE;
 };
 
 // Enumerates every Vulkan-capable GPU on the system and logs it. If
@@ -65,6 +75,7 @@ static vkb::PhysicalDevice pickPhysicalDevice(vkb::Instance& instance,
 		auto devicesRet = selector.select_devices();
 		if(!devicesRet){
 			fmt::print(stderr, "Failed to enumerate Vulkan device: {}\n", devicesRet.error().message());
+			pauseBeforeExit();
 			std::exit(1);
 		}
 
@@ -106,6 +117,7 @@ static VulkanCore initVulkan(GLFWwindow* window, const std::string& preferredGpu
 		std::exit(1);
 	}
 	core.instance = instRet.value();
+
 	//Diagnostic: prove the handle is actually valid befor ewe hand it to GLFW.
 	fmt::print("Vulkan instance handle: {}\n",
 		static_cast<void*>(core.instance.instance));
@@ -132,6 +144,7 @@ static VulkanCore initVulkan(GLFWwindow* window, const std::string& preferredGpu
 	}
 	core.device = devRet.value();
 	core.graphicsQueue = core.device.get_queue(vkb::QueueType::graphics).value();
+	core.graphicsQueueFamily = core.device.get_queue_index(vkb::QueueType::graphics).value();
 
 	//Note: SwapchainBuilder's convenience method names have shifted
 	//slightly across vk-bootstrap release -- if this doesn't compile,
@@ -146,8 +159,130 @@ static VulkanCore initVulkan(GLFWwindow* window, const std::string& preferredGpu
 		std::exit(1);
 	}
 	core.swapchain = scRet.value();
+	core.swapchainImages = core.swapchain.get_images().value();
 	return core;
 }
+
+//Records one command buffer per swapchain image: transition to a
+// clear-fiendly layout, clear to a color, transition to present layout.
+// Recorded once at startup since the clear color never changes -- no
+// per-frame re-recording needed for this milestone.
+static void recordClearCommandBuffers(VulkanCore& core){
+		VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+		poolInfo.queueFamilyIndex = core.graphicsQueueFamily;
+		poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		if(vkCreateCommandPool(core.device.device, &poolInfo, nullptr, &core.commandPool) != VK_SUCCESS){
+			fmt::print(stderr, "Failed to create command pool.\n");
+			pauseBeforeExit();
+			std::exit(1);
+		}
+		core.commandBuffers.resize(core.swapchainImages.size());
+		VkCommandBufferAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+		allocInfo.commandPool = core.commandPool;
+		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.commandBufferCount = static_cast<uint32_t>(core.commandBuffers.size());
+		if(vkAllocateCommandBuffers(core.device.device, &allocInfo, core.commandBuffers.data()) != VK_SUCCESS){
+			fmt::print(stderr, "Failed to allocate command buffers.\n");
+			pauseBeforeExit();
+			std::exit(1);
+		}
+		//dark, slightely desaturated blue -- placeholder "PSX menu" color,
+		// easy to swap for a real render pass clear value later
+		VkClearColorValue clearColor{{0.04F, 0.05F, 0.09F, 1.0F}};
+		VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+		for(size_t i = 0; i < core.commandBuffers.size(); ++i){
+			VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+			vkBeginCommandBuffer(core.commandBuffers[i], &beginInfo);
+
+			VkImageMemoryBarrier toClear{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+			toClear.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			toClear.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			toClear.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			toClear.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			toClear.image = core.swapchainImages[i];
+			toClear.subresourceRange = range;
+			toClear.srcAccessMask = 0;
+			toClear.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			vkCmdPipelineBarrier(core.commandBuffers[i],
+					VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+				    VK_PIPELINE_STAGE_TRANSFER_BIT,
+						0,
+						0,nullptr,
+						0,nullptr,
+						1, &toClear);
+			vkCmdClearColorImage(core.commandBuffers[i], core.swapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				&clearColor, 1, &range);
+
+			VkImageMemoryBarrier toPresent = toClear;
+			toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+			toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			toPresent.dstAccessMask = 0;
+			vkCmdPipelineBarrier(core.commandBuffers[i],
+				VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
+				nullptr, 0,nullptr, 1, &toPresent);
+
+
+			vkEndCommandBuffer(core.commandBuffers[i]);
+			VkSemaphoreCreateInfo semInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+			VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; // start signlaed so frame 1 doesn't stall
+			vkCreateSemaphore(core.device.device, &semInfo, nullptr, &core.imageAvailableSemaphore);
+			vkCreateFence(core.device.device, &fenceInfo, nullptr, &core.inFlightFence);
+		}
+}
+
+static void drawFrame(VulkanCore& core){
+	vkWaitForFences(core.device.device,
+		1, &core.inFlightFence, VK_TRUE, UINT64_MAX);
+
+	uint32_t imageIndex{};
+	VkResult acquireResult =
+		vkAcquireNextImageKHR(core.device.device, core.swapchain.swapchain, UINT64_MAX, core.imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+	if(acquireResult == VK_ERROR_OUT_OF_DATE_KHR){
+		//Window was resized -- swapchain recreation is a later milestone
+		return;
+	}
+	vkResetFences(core.device.device, 1, &core.inFlightFence);
+
+	VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+	submitInfo.waitSemaphoreCount  = 1;
+	submitInfo.pWaitSemaphores = &core.imageAvailableSemaphore;
+	submitInfo.pWaitDstStageMask = &waitStage;
+	submitInfo.commandBufferCount = 1;
+	submitInfo.pCommandBuffers = &core.commandBuffers[imageIndex] ;
+	submitInfo.signalSemaphoreCount = 1;
+	submitInfo.pSignalSemaphores = &core.renderFinishedSemaphore;
+	vkQueueSubmit(core.graphicsQueue, 1, &submitInfo, core.inFlightFence);
+
+	VkPresentInfoKHR presentInfo{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+	presentInfo.waitSemaphoreCount = 1;
+	presentInfo.pWaitSemaphores = &core.renderFinishedSemaphore;
+	presentInfo.swapchainCount = 1;
+	presentInfo.pSwapchains = &core.swapchain.swapchain;
+	presentInfo.pImageIndices = &imageIndex;
+	vkQueuePresentKHR(core.graphicsQueue, &presentInfo);
+}
+
+static void cleanup(VulkanCore& core, GLFWwindow* window){
+	vkDeviceWaitIdle(core.device.device);
+
+	vkDestroySemaphore(core.device.device, core.renderFinishedSemaphore, nullptr);
+	vkDestroyFence(core.device.device, core.inFlightFence,nullptr);
+	vkDestroyCommandPool(core.device.device, core.commandPool, nullptr);//frees command buffer too
+
+	vkb::destroy_swapchain(core.swapchain);
+	vkb::destroy_device(core.device);
+	vkb::destroy_surface(core.instance, core.surface);
+	vkb::destroy_instance(core.instance);
+
+	glfwDestroyWindow(window);
+	glfwTerminate();
+}
+
 
 
 
@@ -178,6 +313,9 @@ int main(int argc, char** argv){
 	VulkanCore vk = initVulkan(window, preferrdGpu);
 	fmt::print("Vulkan device ready: {}\n", vk.physicalDevice.name);
 	fmt::print("Swapchain image: {}\n", vk.swapchain.image_count);
+
+	recordClearCommandBuffers(vk);
+	fmt::print("Command Buffers recorded -- enterning render loop.\n");
 
 	while(!glfwWindowShouldClose(window)){
 		glfwPollEvents();

@@ -1,0 +1,11 @@
+
+flowchart ID
+    A[main: glfwInit + crate window] --> B[initVulkan: instance, surface, device, swapchain]
+    B --> C[recordClearCommandBuffers: one cmd buffer per swapchain image]
+    C --> D[render loop]
+    D --> E[glfwPollEvents]
+    E --> F[drawFrame: acquire image, submit, present]
+    F --> G{Escape pressed or window closed?}
+    G == no ==> D
+    G == yes ==> H[cleanup: destroy swapchain, device,surface, instance, window]
+    H --> I[end]

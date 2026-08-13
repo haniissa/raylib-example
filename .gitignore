@@ -7,3 +7,4 @@ s.md
 
 /build
 src/palyAroundInC++.cpp
+.cache/
