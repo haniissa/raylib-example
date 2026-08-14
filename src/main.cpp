@@ -1,22 +1,21 @@
-//Milestone 1: open a window with raylib, bring up a Vulkan instance,
-// physical device, logical device, and swapchain through vk-bootstrapk,
-// and prove device seleciton works from the command line.
+//Milstone 2: clear the swapchain to a solid color every frame
+// and present it. No render pass / pipline yet -- that arries with the
+// PSX shader once there's a maze/player to actually draw. This uses
+// vkCmdClearColorImage directly on the swapchain image, which needs two
+// layout transitions (barriers) around it but no framebuffer/render pass.
 //
 // Usage:
-// 		psx_maze_shooter          ->    picks the default GPU (vk-bootstrap)
-// 		psx_maze_shooter --gpu "RTX"   ->  picks the first device whose name
-//												contains "RTX"
-
-// Architechture: raylib owns the window and input polling. rahl's OpenGl
-// context exists underneath (IntWindow create it) but is left
-// completely idle -- we never call BeginDrawing/EndDrawing or any
-// raylib Draw* function. All rendering is hand-written Vulkan.
-
+// 		psx_maze_shooter     -> picks the default GPU (vk-bootstrap)
+// 								prefers a discrete GPU if present)
+// 		psx_maze_shooter --gpu  'RTX'  -> picks the first device whose name
+// 								contains "RTX"
+// Architecture: GLFW (fetched directly, one single copy) owns the window
+// and input polling, with GLFW_NO_API so it never opens a GL context.
+// All rendering is hand-written Vulkan, bootstrapped with vk-bootstrap.
 
 
-
-#include <cstdint>
 #define GLFW_INCLUDE_NONE
+#include <cstdint>
 #include <cstdio>
 #include <fmt/base.h>
 #include <vulkan/vulkan_core.h>
@@ -119,15 +118,7 @@ static VulkanCore initVulkan(GLFWwindow* window, const std::string& preferredGpu
 	core.instance = instRet.value();
 
 	//Diagnostic: prove the handle is actually valid befor ewe hand it to GLFW.
-	fmt::print("Vulkan instance handle: {}\n",
-		static_cast<void*>(core.instance.instance));
-	if(core.instance.instance == VK_NULL_HANDLE){
-		fmt::print(stderr, "vk-boostrap reported success bu the instance handle is null."
-			"This mean the vulkan loader itself is the problem, not our code---"
-			"most likey an incomplete/missing Vulkan SDK install.\n");
-		pauseBeforeExit();
-		std::exit(1);
-	}
+
 	if(glfwCreateWindowSurface(core.instance, window, nullptr, &core.surface) != VK_SUCCESS){
 		fmt::print(stderr, "Failed to create Vulkan surface from the GLFW window\n");
 		pauseBeforeExit();
@@ -152,6 +143,7 @@ static VulkanCore initVulkan(GLFWwindow* window, const std::string& preferredGpu
 	vkb::SwapchainBuilder swapchainBuilder{ core.device };
 	auto scRet = swapchainBuilder.use_default_format_selection()
 		.set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+		.add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
 		.build();
 	if(!scRet){
 		fmt::print(stderr, "Failed to create swapchain: {}\n", scRet.error().message());
@@ -220,17 +212,19 @@ static void recordClearCommandBuffers(VulkanCore& core){
 			toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 			toPresent.dstAccessMask = 0;
 			vkCmdPipelineBarrier(core.commandBuffers[i],
-				VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+				VK_PIPELINE_STAGE_TRANSFER_BIT,
 				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
 				nullptr, 0,nullptr, 1, &toPresent);
 
 
 			vkEndCommandBuffer(core.commandBuffers[i]);
-			VkSemaphoreCreateInfo semInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-			VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; // start signlaed so frame 1 doesn't stall
-			vkCreateSemaphore(core.device.device, &semInfo, nullptr, &core.imageAvailableSemaphore);
-			vkCreateFence(core.device.device, &fenceInfo, nullptr, &core.inFlightFence);
 		}
+		VkSemaphoreCreateInfo semInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+		VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; // start signlaed so frame 1 doesn't stall
+		fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Start signaled so frame 1 doesn't stall
+		vkCreateSemaphore(core.device.device, &semInfo, nullptr, &core.imageAvailableSemaphore);
+		vkCreateSemaphore(core.device.device, &semInfo, nullptr, &core.renderFinishedSemaphore);
+		vkCreateFence(core.device.device, &fenceInfo, nullptr, &core.inFlightFence);
 }
 
 static void drawFrame(VulkanCore& core){
@@ -270,6 +264,7 @@ static void drawFrame(VulkanCore& core){
 static void cleanup(VulkanCore& core, GLFWwindow* window){
 	vkDeviceWaitIdle(core.device.device);
 
+	vkDestroySemaphore(core.device.device, core.imageAvailableSemaphore, nullptr);
 	vkDestroySemaphore(core.device.device, core.renderFinishedSemaphore, nullptr);
 	vkDestroyFence(core.device.device, core.inFlightFence,nullptr);
 	vkDestroyCommandPool(core.device.device, core.commandPool, nullptr);//frees command buffer too
@@ -322,6 +317,7 @@ int main(int argc, char** argv){
 		if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS){
 			glfwSetWindowShouldClose(window, GLFW_TRUE);
 		}
+		drawFrame(vk);
 	}
 	glfwDestroyWindow(window);
 	glfwTerminate();
