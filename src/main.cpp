@@ -1,19 +1,28 @@
-//Milstone 2: clear the swapchain to a solid color every frame
-// and present it. No render pass / pipline yet -- that arries with the
-// PSX shader once there's a maze/player to actually draw. This uses
-// vkCmdClearColorImage directly on the swapchain image, which needs two
-// layout transitions (barriers) around it but no framebuffer/render pass.
+
+//Milestone 3a: a real render pass + graphics pipeline drawing a colored
+// quad (vertex colors, no texture yet). This replace the raw
+// vkCmdClearColorImage hack from milestone 2 -- the render pass now owns
+// the layout trnsitions via its attachment description + subpass
+// dependency, so we no longer hand-write barriers for the swapchain
+// image. Texture sampling (descriptor sets, image loading) is the next
+// milestone on top of this.
 //
 // Usage:
-// 		psx_maze_shooter     -> picks the default GPU (vk-bootstrap)
-// 								prefers a discrete GPU if present)
-// 		psx_maze_shooter --gpu  'RTX'  -> picks the first device whose name
-// 								contains "RTX"
-// Architecture: GLFW (fetched directly, one single copy) owns the window
+// 		psx_maze_shooter               -> picks the default GPU (vk-bootstrap
+// 										  perfers a discriter GPU if present)
+// 		psx_maze_shooter --gpu "RTX"   -> picks the first device whose name
+// 										  contains "RTX"
+//
+// Architecture: GLFW (featched directly, one single copy) owns the window
 // and input polling, with GLFW_NO_API so it never opens a GL context.
-// All rendering is hand-written Vulkan, bootstrapped with vk-bootstrap.
+// IMPORTANT: vulkan.h must be included before glfw3.h, or GLFW won't
+// declare glfwCreateWindowSurface (it's gated behind VK_VERSION_1_0
+// already being defined).
 
 
+#include <cstddef>
+#include <cstring>
+#include <ios>
 #define GLFW_INCLUDE_NONE
 #include <cstdint>
 #include <cstdio>
@@ -32,6 +41,7 @@
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <fstream>
 
 
 using namespace fmt;
@@ -43,6 +53,21 @@ static void pauseBeforeExit(){
 	std::cin.get();
 }
 
+struct Vertex {
+	float pos[2];
+	float color[3];
+};
+//A quad made of two triangles, each corner a different color so it's
+//obvious the vertex buffer (not just a hardcoded shader color) is what's
+// driving the picture.
+
+static const std::vector<Vertex> kVertices = {
+	{{-0.6F, -0.6F}, {1.0F, 0.2F, 0.2F}}, // bottom-left: red
+	{{0.6F, -0.6F}, {0.2F, 1.0F, 0.2F}},  // bottom-right: green
+	{{0.6F, 0.6F}, {0.2F, 0.4F, 1.0F}},  //top-right: blue
+	{{-0.6F, 0.6F}, {1.0F, 1.0F, 1.0F}}, //top-left: white
+};
+static const std::vector<uint16_t> kIndices = {0,1,2,2,3,0};
 
 struct VulkanCore{
 	vkb::Instance instance;
@@ -52,7 +77,18 @@ struct VulkanCore{
 	VkQueue graphicsQueue = VK_NULL_HANDLE;
 	uint32_t graphicsQueueFamily = 0;
 	vkb::Swapchain swapchain;
-	std::vector<VkImage> swapchainImages;
+	std::vector<VkImageView> swapchainImagesViews;
+
+	VkRenderPass renderPass = VK_NULL_HANDLE;
+	std::vector<VkFramebuffer> framebuffers;
+
+	VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+	VkPipeline pipline = VK_NULL_HANDLE;
+
+	VkBuffer vertexBuffer = VK_NULL_HANDLE;
+	VkDeviceMemory vertexBufferMemory = VK_NULL_HANDLE;
+	VkBuffer indexBuffer= VK_NULL_HANDLE;
+	VkDeviceMemory indexBufferMemory = VK_NULL_HANDLE;
 
 	VkCommandPool commandPool = VK_NULL_HANDLE;
 	std::vector<VkCommandBuffer> commandBuffers; // one per swapchain iamge
@@ -143,7 +179,7 @@ static VulkanCore initVulkan(GLFWwindow* window, const std::string& preferredGpu
 	vkb::SwapchainBuilder swapchainBuilder{ core.device };
 	auto scRet = swapchainBuilder.use_default_format_selection()
 		.set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-		.add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+		// .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
 		.build();
 	if(!scRet){
 		fmt::print(stderr, "Failed to create swapchain: {}\n", scRet.error().message());
@@ -151,15 +187,293 @@ static VulkanCore initVulkan(GLFWwindow* window, const std::string& preferredGpu
 		std::exit(1);
 	}
 	core.swapchain = scRet.value();
-	core.swapchainImages = core.swapchain.get_images().value();
+	auto viewRet = core.swapchain.get_image_views();
+	if(!viewRet){
+		fmt::print(stderr, "Failed to get swapchain image views: {}\n",
+			viewRet.error().message());
+		pauseBeforeExit();
+		std::exit(1);
+	}
+	core.swapchainImagesViews = viewRet.value();
 	return core;
 }
 
-//Records one command buffer per swapchain image: transition to a
-// clear-fiendly layout, clear to a color, transition to present layout.
-// Recorded once at startup since the clear color never changes -- no
-// per-frame re-recording needed for this milestone.
-static void recordClearCommandBuffers(VulkanCore& core){
+static uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter,VkMemoryPropertyFlags properties){
+		VkPhysicalDeviceMemoryProperties memProps;
+		vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProps);
+		for(uint32_t i{}; i < memProps.memoryTypeCount; ++i){
+			if((typeFilter & (1 << i)) &&
+				(memProps.memoryTypes[i].propertyFlags & properties) == properties){
+					return i;
+				}
+		}
+		fmt::print(stderr, "Failed to find a suitable memory type.\n");
+		pauseBeforeExit();
+		std::exit(1);
+}
+
+//Simple host--visible buffer -- fine for a handful of static vertice,
+// not how we'll upload real mesh/texture data later (that wants a
+// device-local buffer + staging copy for performance).
+static void createHostVisibleBuffer(VulkanCore& core, VkDeviceSize size, VkBufferUsageFlags usage,
+	VkBuffer& outBuffer, VkDeviceMemory& outMemory,
+	const void* data){
+		VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+		bufferInfo.size = size;
+		bufferInfo.usage = usage;
+		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		if(vkCreateBuffer(core.device.device, &bufferInfo, nullptr, &outBuffer) != VK_SUCCESS){
+			fmt::print(stderr, "Failed to create buffer.\n");
+			pauseBeforeExit();
+			std::exit(1);
+		}
+		VkMemoryRequirements memReq;
+		vkGetBufferMemoryRequirements(core.device.device, outBuffer, &memReq);
+
+		VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+		allocInfo.allocationSize = memReq.size;
+		allocInfo.memoryTypeIndex =
+			findMemoryType(core.physicalDevice.physical_device,  memReq.memoryTypeBits,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		if(vkAllocateMemory(core.device.device, &allocInfo, nullptr, &outMemory) != VK_SUCCESS){
+			fmt::print(stderr, "Failed to allocate buffer memory.\n");
+			pauseBeforeExit();
+			std::exit(1);
+		}
+
+
+		vkBindBufferMemory(core.device.device, outBuffer, outMemory, 0);
+
+		void* mapped = nullptr;
+		vkMapMemory(core.device.device, outMemory, 0,  size, 0, &mapped);
+		std::memcpy(mapped, data, static_cast<size_t>(size));
+		vkUnmapMemory(core.device.device, outMemory);
+}
+
+
+static void createGeometryBuffers(VulkanCore& core){
+	createHostVisibleBuffer(core, sizeof(Vertex)* kVertices.size(),
+		VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, core.vertexBuffer,
+		core.vertexBufferMemory, kVertices.data());
+	createHostVisibleBuffer(core, sizeof(uint16_t) * kIndices.size(),
+		VK_BUFFER_USAGE_INDEX_BUFFER_BIT, core.indexBuffer,
+		core.indexBufferMemory, kIndices.data());
+}
+
+static void createRenderPass(VulkanCore& core){
+	VkAttachmentDescription colorAttachment{};
+	colorAttachment.format = core.swapchain.image_format;
+	colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+	VkAttachmentReference colorRef{};
+	colorRef.attachment = 0;
+	colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	VkSubpassDescription subpass{};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments = &colorRef;
+
+	VkSubpassDependency dependency{};
+	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency.dstSubpass = 0;
+	dependency.srcAccessMask = 0;
+	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.srcAccessMask = 0;
+	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+	VkRenderPassCreateInfo rpInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+	rpInfo.attachmentCount = 1;
+	rpInfo.pAttachments = &colorAttachment;
+	rpInfo.subpassCount = 1;
+	rpInfo.pSubpasses = &subpass;
+	rpInfo.dependencyCount = 1;
+	rpInfo.pDependencies = &dependency;
+
+	if(vkCreateRenderPass(core.device.device, &rpInfo, nullptr, &core.renderPass) != VK_SUCCESS){
+		fmt::print(stderr, "Failed to create render pass.\n");
+		pauseBeforeExit();
+		std::exit(1);
+	}
+}
+
+static void createFramebuffer(VulkanCore& core){
+	core.framebuffers.resize(core.swapchainImagesViews.size());
+	for(size_t i{}; i < core.swapchainImagesViews.size(); ++i){
+		VkImageView attachments[] = {core.swapchainImagesViews[i]};
+		VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+		fbInfo.renderPass = core.renderPass;
+		fbInfo.attachmentCount = 1;
+		fbInfo.pAttachments = attachments;
+		fbInfo.width = core.swapchain.extent.width;
+		fbInfo.height = core.swapchain.extent.height;
+		fbInfo.layers = 1;
+		if(vkCreateFramebuffer(core.device.device, &fbInfo, nullptr, &core.framebuffers[i]) != VK_SUCCESS){
+			fmt::print(stderr,"Failed to create framebuffer {}.\n", i);
+			pauseBeforeExit();
+			std::exit(1);
+		}
+	}
+}
+
+static std::vector<char> readFile(const std::string& path){
+	std::ifstream file(path, std::ios::ate | std::ios::binary);
+	if(!file.is_open()){
+		fmt::print(stderr, "Failed to open shader file: {}\n", path);
+		pauseBeforeExit();
+		std::exit(1);
+	}
+	size_t size = static_cast<size_t>(file.tellg());
+	std::vector<char> buffer(size);
+	file.seekg(0);
+	file.read(buffer.data(), static_cast<std::streamsize>(size));
+	return buffer;
+}
+
+static VkShaderModule createShaderModule(VkDevice device, const std::vector<char>& code){
+	VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+	info.codeSize = code.size();
+	info.pCode = reinterpret_cast<const uint32_t*>(code.data());
+	VkShaderModule module;
+	if(vkCreateShaderModule(device, &info, nullptr, &module) != VK_SUCCESS){
+		fmt::print(stderr, "Failed to create shader module.\n");
+		pauseBeforeExit();
+		std::exit(1);
+	}
+	return module;
+}
+
+static void createPipeline(VulkanCore& core){
+	#ifndef SHADER_DIR
+	#define SHADER_DIR "shaders/"
+	#endif
+
+	auto vertCode = readFile(std::string(SHADER_DIR) + "/basic.vert.spv");
+	auto fragCode = readFile(std::string(SHADER_DIR) + "/basic.frag.spv");
+	VkShaderModule vertModule = createShaderModule(core.device.device, vertCode);
+	VkShaderModule fragModule = createShaderModule(core.device.device, fragCode);
+
+	VkPipelineShaderStageCreateInfo vertStage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+	vertStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+	vertStage.module = vertModule;
+	vertStage.pName = "main";
+
+	VkPipelineShaderStageCreateInfo fragStage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+	fragStage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+	fragStage.module = fragModule;
+	fragStage.pName = "main";
+
+	VkPipelineShaderStageCreateInfo stages[] ={vertStage, fragStage};
+
+	VkVertexInputBindingDescription  binding{};
+	binding.binding = 0;
+	binding.stride = sizeof(Vertex);
+	binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+	VkVertexInputAttributeDescription attributes[2]{};
+	attributes[0].location = 0;
+	attributes[0].binding = 0;
+	attributes[0].format = VK_FORMAT_R32G32_SFLOAT;
+	attributes[0].offset = offsetof(Vertex, pos);
+	attributes[1].location = 1;
+	attributes[1].binding = 0;
+	attributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+	attributes[1].offset = offsetof(Vertex, color);
+
+	VkPipelineVertexInputStateCreateInfo  vertexInput{
+		VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
+	};
+	vertexInput.vertexBindingDescriptionCount = 1;
+	vertexInput.pVertexBindingDescriptions = &binding;
+	vertexInput.vertexAttributeDescriptionCount  = 2;
+	vertexInput.pVertexAttributeDescriptions = attributes;
+
+	VkPipelineInputAssemblyStateCreateInfo inputAssembly{
+		VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO
+	};
+	inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+	VkPipelineViewportStateCreateInfo viewportState{
+		VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO
+	};
+	viewportState.viewportCount = 1;
+	viewportState.scissorCount = 1;
+
+	VkPipelineRasterizationStateCreateInfo rasterizer {
+		VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO
+	};
+	rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+	rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+	rasterizer.lineWidth =  1.0F;
+
+	VkPipelineMultisampleStateCreateInfo multisampling{
+		VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO
+	};
+	multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+	VkPipelineColorBlendAttachmentState blendAttachment{};
+	blendAttachment.colorWriteMask =
+		VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+		| VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+	blendAttachment.blendEnable = VK_FALSE;
+
+	VkPipelineColorBlendStateCreateInfo colorBlend{
+		VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO
+	};
+
+	colorBlend.attachmentCount = 1;
+	colorBlend.pAttachments = &blendAttachment;
+
+	VkDynamicState dynamicStates[] = {
+		VK_DYNAMIC_STATE_VIEWPORT,
+		VK_DYNAMIC_STATE_SCISSOR};
+	VkPipelineDynamicStateCreateInfo dynamicState{
+		VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO
+	};
+	dynamicState.dynamicStateCount = 2;
+	dynamicState.pDynamicStates = dynamicStates;
+
+	VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+	//No descriptor sets yet -- texture sampling is the next milestone.
+	if(vkCreatePipelineLayout(core.device.device,
+		&layoutInfo, nullptr, &core.pipelineLayout) != VK_SUCCESS){
+			fmt::print(stderr, "Failed to create pipline layout.\n");
+			pauseBeforeExit();
+			std::exit(1);
+		}
+	VkGraphicsPipelineCreateInfo  pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+	pipelineInfo.stageCount = 2;
+	pipelineInfo.pStages = stages ;
+	pipelineInfo.pVertexInputState = &vertexInput ;
+	pipelineInfo.pInputAssemblyState = &inputAssembly;
+	pipelineInfo.pViewportState =  &viewportState;
+	pipelineInfo.pRasterizationState = &rasterizer;
+	pipelineInfo.pMultisampleState = &multisampling;
+	pipelineInfo.pColorBlendState = &colorBlend;
+	pipelineInfo.pDynamicState = &dynamicState;
+	pipelineInfo.layout = core.pipelineLayout;
+	pipelineInfo.renderPass = core.renderPass;
+	pipelineInfo.subpass = 0;
+
+	if(vkCreateGraphicsPipelines(core.device.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &core.pipline) != VK_SUCCESS){
+		fmt::print(stderr, "Failed to create graphics pipline.\n");
+		pauseBeforeExit();
+		std::exit(1);
+	}
+	vkDestroyShaderModule(core.device.device, vertModule, nullptr);
+	vkDestroyShaderModule(core.device.device, fragModule, nullptr);
+}
+
+//Recored once at startup -- the draw doesn't change frame to frame yet.
+static void recordCommandBuffers(VulkanCore& core){
 		VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 		poolInfo.queueFamilyIndex = core.graphicsQueueFamily;
 		poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -168,7 +482,7 @@ static void recordClearCommandBuffers(VulkanCore& core){
 			pauseBeforeExit();
 			std::exit(1);
 		}
-		core.commandBuffers.resize(core.swapchainImages.size());
+		core.commandBuffers.resize(core.framebuffers.size());
 		VkCommandBufferAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
 		allocInfo.commandPool = core.commandPool;
 		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -180,45 +494,41 @@ static void recordClearCommandBuffers(VulkanCore& core){
 		}
 		//dark, slightely desaturated blue -- placeholder "PSX menu" color,
 		// easy to swap for a real render pass clear value later
-		VkClearColorValue clearColor{{0.04F, 0.05F, 0.09F, 1.0F}};
-		VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		VkClearValue clearColor{};
+		clearColor.color = {{0.04F, 0.05F, 0.09F, 1.0F}};
+		VkExtent2D extent = core.swapchain.extent;
+		VkViewport viewport{0.0f, 0.0F, static_cast<float>(extent.width),
+			static_cast<float>(extent.height), 0.0f, 1.0F};
+		VkRect2D scissor{{0,0}, extent};
+
 
 		for(size_t i = 0; i < core.commandBuffers.size(); ++i){
 			VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
 			vkBeginCommandBuffer(core.commandBuffers[i], &beginInfo);
 
-			VkImageMemoryBarrier toClear{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-			toClear.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			toClear.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-			toClear.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			toClear.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-			toClear.image = core.swapchainImages[i];
-			toClear.subresourceRange = range;
-			toClear.srcAccessMask = 0;
-			toClear.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-			vkCmdPipelineBarrier(core.commandBuffers[i],
-					VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-				    VK_PIPELINE_STAGE_TRANSFER_BIT,
-						0,
-						0,nullptr,
-						0,nullptr,
-						1, &toClear);
-			vkCmdClearColorImage(core.commandBuffers[i], core.swapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-				&clearColor, 1, &range);
+			VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+			rpBegin.renderPass = core.renderPass;
+			rpBegin.framebuffer = core.framebuffers[i];
+			rpBegin.renderArea = scissor;
+			rpBegin.clearValueCount = 1;
+			rpBegin.pClearValues = &clearColor;
 
-			VkImageMemoryBarrier toPresent = toClear;
-			toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-			toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-			toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-			toPresent.dstAccessMask = 0;
-			vkCmdPipelineBarrier(core.commandBuffers[i],
-				VK_PIPELINE_STAGE_TRANSFER_BIT,
-				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
-				nullptr, 0,nullptr, 1, &toPresent);
+			vkCmdBeginRenderPass(core.commandBuffers[i], &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+			vkCmdBindPipeline(core.commandBuffers[i],  VK_PIPELINE_BIND_POINT_GRAPHICS, core.pipline);
+			vkCmdSetViewport(core.commandBuffers[i], 0, 1, &viewport);
+			vkCmdSetScissor(core.commandBuffers[i], 0, 1, &scissor);
 
+			VkBuffer vertexBuffers[] = {core.vertexBuffer};
+			VkDeviceSize offsets[] = {0};
+			vkCmdBindVertexBuffers(core.commandBuffers[i], 0, 1, vertexBuffers, offsets);
+			vkCmdBindIndexBuffer(core.commandBuffers[i], core.indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+			vkCmdDrawIndexed(core.commandBuffers[i], static_cast<uint32_t>(kIndices.size()), 1, 0, 0, 0);
 
+			vkCmdEndRenderPass(core.commandBuffers[i]);
 			vkEndCommandBuffer(core.commandBuffers[i]);
 		}
+
 		VkSemaphoreCreateInfo semInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 		VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO}; // start signlaed so frame 1 doesn't stall
 		fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // Start signaled so frame 1 doesn't stall
@@ -241,7 +551,7 @@ static void drawFrame(VulkanCore& core){
 	}
 	vkResetFences(core.device.device, 1, &core.inFlightFence);
 
-	VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
 	submitInfo.waitSemaphoreCount  = 1;
 	submitInfo.pWaitSemaphores = &core.imageAvailableSemaphore;
@@ -269,6 +579,17 @@ static void cleanup(VulkanCore& core, GLFWwindow* window){
 	vkDestroyFence(core.device.device, core.inFlightFence,nullptr);
 	vkDestroyCommandPool(core.device.device, core.commandPool, nullptr);//frees command buffer too
 
+	vkDestroyBuffer(core.device.device, core.vertexBuffer, nullptr);
+	vkFreeMemory(core.device.device, core.vertexBufferMemory, nullptr);
+	vkDestroyBuffer(core.device.device, core.indexBuffer, nullptr);
+	vkFreeMemory(core.device.device, core.indexBufferMemory, nullptr);
+
+	vkDestroyPipeline(core.device.device, core.pipline, nullptr);
+	vkDestroyPipelineLayout(core.device.device, core.pipelineLayout, nullptr);
+	for(auto fb : core.framebuffers) vkDestroyFramebuffer(core.device.device, fb, nullptr);
+	vkDestroyRenderPass(core.device.device, core.renderPass, nullptr);
+
+	core.swapchain.destroy_image_views(core.swapchainImagesViews);
 	vkb::destroy_swapchain(core.swapchain);
 	vkb::destroy_device(core.device);
 	vkb::destroy_surface(core.instance, core.surface);
@@ -309,7 +630,11 @@ int main(int argc, char** argv){
 	fmt::print("Vulkan device ready: {}\n", vk.physicalDevice.name);
 	fmt::print("Swapchain image: {}\n", vk.swapchain.image_count);
 
-	recordClearCommandBuffers(vk);
+	createGeometryBuffers(vk);
+	createRenderPass(vk);
+	createFramebuffer(vk);
+	createPipeline(vk);
+	recordCommandBuffers(vk);
 	fmt::print("Command Buffers recorded -- enterning render loop.\n");
 
 	while(!glfwWindowShouldClose(window)){

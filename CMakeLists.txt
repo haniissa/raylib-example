@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
-project(${PROJECT_NAME} VERSION 1.0 LANGUAGES CXX)
+# set(PROJECT_NAME "3Dgame")
 set(APPEND PROJECT_NAME ${PROJECT_NAME})
+project(${PROJECT_NAME} VERSION 1.0 LANGUAGES CXX)
 include(FetchContent)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -13,9 +14,11 @@ find_package(raylib CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(vk-bootstrap REQUIRED)
 find_package(Vulkan REQUIRED)
+find_package(Doxygen QUIET)
 # if(NOT glfw_FOUND)
 find_package(glfw QUIET)
 # endif()
+
 #==========================================
 if(fmt_FOUND)
    message(STATUS "Found fmt via Cmake CONFIG")
@@ -101,23 +104,38 @@ else()
   endif()
 endif()
 
+function(gl)
+  message(STATUS "gl function enter")
+  find_program(GLSLC glslc REQUIRED)
+  set(SHADER_SOURCES
+    ${CMAKE_SOURCE_DIR}/shaders/basic.vert
+    ${CMAKE_SOURCE_DIR}/shaders/basic.frag
+  )
+  set(SPIRV_BINARIES "")
+  foreach(SHADER ${SHADER_SOURCES})
+    get_filename_component(SHADER_NAME ${SHADER} NAME)
+    set(SPIRV ${CMAKE_BINARY_DIR}/shaders/${SHADER_NAME}.spv)
+    add_custom_command(
+      OUTPUT ${SPIRV}
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders
+      COMMAND ${GLSLC} ${SHADER} -o ${SPIRV}
+      DEPENDS ${SHADER}
+      COMMENT "Compiling ${SHADER_NAME} to SPIR-V"
+    )
+    list(APPEND SPIRV_BINARIES ${SPIRV})
+  endforeach()
+  add_custom_target(Shaders DEPENDS ${SPIRV_BINARIES})
+endfunction()
 
-
-#Executable
-add_executable(${PROJECT_NAME} src/main.cpp
-
-)
-
-# add_executable(${PROJECT_NAME} src/main.cpp
-#   src/Enemy.cpp
-#   src/Game.cpp
-#   src/Player.cpp
-#   src/Bullet.cpp
-#   src/Vulkancompute.cpp
-# )
 if(RAYLIB_INCLUDE_DIRS)
   target_include_directories(${PROJECT_NAME} PRIVATE ${RAYLIB_INCLUDE_DIRS})
 endif()
+
+#Executable
+add_executable(${PROJECT_NAME} src/main.cpp)
+add_dependencies(${PROJECT_NAME} Shaders)
+target_include_directories(${PROJECT_NAME} PRIVATE src)
+target_compile_definitions(${PROJECT_NAME} PRIVATE SHADER_DIR="${CMAKE_BINARY_DIR}/shaders")
 
 # target_link_libraries(${PROJECT_NAME} PRIVATE ${RAYLIB_LIBRARIES} fmt::fmt)
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -128,10 +146,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   Vulkan::Vulkan
 )
 
+gl()
+
 #Copy shaders to put dir when building
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.vert  $<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders/shader.vert
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.frag  $<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders/shader.frag
-  COMMENT "Copying GLSL shaders to build output directory"
-)
+
+# add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+#   COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders
+#   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.vert  $<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders/shader.vert
+#   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.frag  $<TARGET_FILE_DIR:${PROJECT_NAME}>/shaders/shader.frag
+#   COMMENT "Copying GLSL shaders to build output directory"
+# )
